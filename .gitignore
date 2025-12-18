@@ -47,3 +47,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Sandbox
+sandbox/
+
+# Credentials file
+creds/
