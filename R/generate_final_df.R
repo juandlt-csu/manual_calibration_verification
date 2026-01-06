@@ -1,8 +1,8 @@
 # Helper function to generate final_df with updated calibrations
 # Suppress R CMD check notes for NSE used in tidyverse functions
 # These warnings are expected and not actual errors
+
 generate_final_df <- function(cal_data, site_cal_data, decisions) {
-  browser()
   parameter <- unique(cal_data$parameter)
   
   updated_calibrations <- site_cal_data %>% 
@@ -35,11 +35,12 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
     ) %>% 
     select(DT_round, 
            updated_slope_from, updated_slope_to,
-           updated_offset_from, updated_offset_to)
+           updated_offset_from, updated_offset_to,
+           from, to)
   
   # Join decisions to cal_plot_df()
   updated_cal_plot_df <- cal_data %>% 
-    dplyr::left_join(updated_calibrations, by = "DT_round") %>% 
+    dplyr::left_join(updated_calibrations, by = c("sensor_date", "DT_round")) %>% 
     # Forward fill with updated decisions %>% 
     tidyr::fill(updated_slope_from, updated_slope_to,
                 updated_offset_from, updated_offset_to, 
@@ -71,7 +72,12 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
   
   # Validate calibration results and create final calibrated values 
   checked_df <- updated_cal_plot_df  %>%
-    cal_check(df = ., obs_col = "mean_cleaned", lm_trans_col = "mean_lm_trans")
+    cal_check(df = ., obs_col = "mean_cleaned", lm_trans_col = "mean_lm_trans") %>%
+    # If from and to are the original calibration, that means there was no re-calibration,
+    # so this calibration check is actually "FALSE". With this addition, now
+    # FALSE calibration checks mean that either the auto re-calibration failed OR
+    # Manual re-calibration resulted in no re-calibration being done on the data
+    mutate(cal_check = ifelse((from == "Original" & to == "Original"), FALSE, cal_check))
   
   # Reorder the final columns 
   final_df <- checked_df %>%
@@ -88,7 +94,7 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
       file_date, sonde_date, sensor_date_lag, sensor_date, sensor_date_lead,
       # Calibration information columns
       correct_calibration, slope_lag, offset_lag, slope, offset, slope_final, offset_final, slope_lead, offset_lead,
-      updated_slope_from, updated_offset_from, updated_slope_to, updated_offset_to
+      updated_slope_from, updated_offset_from, updated_slope_to, updated_offset_to, wt
       # Remove everything else
     )
   

@@ -1,6 +1,9 @@
 # Define server logic required to draw a histogram
 function(input, output, session) {
   
+  # TODO: Load the next plot and cache it for later loading so that the app feels
+  # snappier
+  
   # Set up reactive values
   # At the beginning of your server function
   values <- reactiveValues(
@@ -99,12 +102,7 @@ function(input, output, session) {
   
   output$field_notes_df <- DT::renderDataTable({
     
-    # Debug: check what we're trying to render
     data <- field_notes_data_df()
-    print("Field notes data structure:")
-    print(str(data))
-    print("Field notes data preview:")
-    print(head(data))
     
     if(nrow(data) == 0) {
       # Return a simple message if no data
@@ -127,7 +125,12 @@ function(input, output, session) {
   # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   
   # Reactive to generate dynamic UI based on datatable
-  # In your renderUI
+  # renderUI "renders reactive HTML using the Shiny UI library"
+  
+  # This is where we generate the decision options for each calibration 
+  # dynamically based on the site calibration data df. These options are rendered
+  # on the UI side under "Options Panel" in the div with `ui_output("dynamic_controls")`
+  
   output$dynamic_controls <- renderUI({
     site_cal_data <- site_calibration_data_df()
     
@@ -147,7 +150,7 @@ function(input, output, session) {
       lag_present <- (!is.na(row_data$slope_lag) & !is.na(row_data$offset_lag))
       
       lead_present <- (!is.na(row_data$slope_lead) & !is.na(row_data$offset_lead))
-
+      
       default_choices <- case_when(
         !lead_present & !lag_present ~ c(NA, "Original", NA),
         !lead_present ~ c("Lag", "Original", NA),
@@ -177,7 +180,7 @@ function(input, output, session) {
       
       div(
         style = "border: 1px solid #ddd; padding: 10px; margin: 5px 0;",
-        h6(paste0("Calibration: ", cal_DT, "; Sensor: ", sensor_calibration_data_choice)),
+        h6(paste0("Calibration: ", cal_DT, "; Sensor: ", sensor_calibration_data_choice, "; Chunk: ", i)),
         
         # Two select inputs side by side for each row
         fluidRow(
@@ -247,10 +250,6 @@ function(input, output, session) {
     
     # Generate and store preview
     values$preview_final_df <- generate_final_df(cal_data, site_cal_data, decisions)
-    
-    print("All decisions:")
-    print(decisions)
-    print("Preview data updated - plot will refresh")
   })
   
   observe({
@@ -275,17 +274,98 @@ function(input, output, session) {
       })
     }
   })
-  
-  # Accept decisions and finalize calibration
-  observeEvent(input$acceptDecisionButton, {
+    
+  # Accept original data and finalize calibration ====
+  observeEvent(input$acceptOriginal, {
+    
     req(input$year_choice)
     req(input$site_param_choice)
     
-    # Get current selections
-    current_year <- input$year_choice
-    current_site_param <- input$site_param_choice
+    final_df <- cal_plot_df() %>%
+      mutate(
+        mean_cleaned_cal = mean_cleaned,
+        cal_check = FALSE
+      ) %>%
+      select(
+        # DT sensor reading columns
+        DT_round,
+        # Field ID columns
+        site, sonde_serial, parameter,
+        # Sensor reading transformation columns
+        mean_cleaned, mean_cleaned_raw, mean_lm_trans, mean_cleaned_cal, cal_check,
+        # Sensor information
+        sensor_serial,
+        # DT calibration information columns
+        file_date, sonde_date, sensor_date_lag, sensor_date, sensor_date_lead,
+        # Calibration information columns
+        correct_calibration, 
+        slope_lag, offset_lag, 
+        slope, offset, 
+        slope_final, offset_final, 
+        slope_lead, offset_lead,
+        wt
+        # Remove everything else
+      )
     
-    # Generate final_df (use preview if available, otherwise generate with current decisions)
+    update_backend(
+      df = final_df, 
+      year = input$year_choice,
+      site_param = input$site_param_choice,
+      session = session
+    )
+    
+    # Clear preview
+    values$preview_final_df <- NULL
+  }) 
+  
+  # Accept re-calibrated data and finalize calibration ====
+  observeEvent(input$acceptRecalibrated, {
+    
+    req(input$year_choice)
+    req(input$site_param_choice)
+
+    final_df <- cal_plot_df() %>%
+      mutate(cal_check = TRUE) %>%
+      select(
+        # DT sensor reading columns
+        DT_round,
+        # Field ID columns
+        site, sonde_serial, parameter,
+        # Sensor reading transformation columns
+        mean_cleaned, mean_cleaned_raw, mean_lm_trans, mean_cleaned_cal, cal_check,
+        # Sensor information
+        sensor_serial,
+        # DT calibration information columns
+        file_date, sonde_date, sensor_date_lag, sensor_date, sensor_date_lead,
+        # Calibration information columns
+        correct_calibration, 
+        slope_lag, offset_lag, 
+        slope, offset, 
+        slope_final, offset_final, 
+        slope_lead, offset_lead,
+        wt
+        # Remove everything else
+      )
+    
+    update_backend(
+      df = final_df, 
+      year = input$year_choice,
+      site_param = input$site_param_choice,
+      session = session
+    )
+    
+    # Clear preview
+    values$preview_final_df <- NULL
+  }) 
+  
+  # Accept updated calibration decisions and finalize calibration ====
+  observeEvent(input$acceptUpdates, {
+    
+    req(input$year_choice)
+    req(input$site_param_choice)
+    
+    # Generate the final dataset to be used based on the updated decisions
+    # (use preview if available, otherwise generate with current decisions)
     if (!is.null(values$preview_final_df)) {
       final_df <- values$preview_final_df
     } else {
@@ -296,52 +376,15 @@ function(input, output, session) {
       final_df <- generate_final_df(cal_data, site_cal_data, decisions)
     }
     
-    # Add to finalized data
-    if (is.null(final_calibrated_data[[current_year]])) {
-      final_calibrated_data[[current_year]] <<- list()
-    }
-    final_calibrated_data[[current_year]][[current_site_param]] <<- final_df
-    
-    # Remove from tracking data
-    calibrated_data_tracking[[current_year]][[current_site_param]] <<- NULL
-    
-    # Save both files
-    readr::write_rds(calibrated_data_tracking, tracking_file)
-    readr::write_rds(final_calibrated_data, finalized_file)
+    update_backend(
+      df = final_df, 
+      year = input$year_choice,
+      site_param = input$site_param_choice,
+      session = session
+    )
     
     # Clear preview
     values$preview_final_df <- NULL
-    
-    # Update UI choices
-    remaining_choices <- names(calibrated_data_tracking[[current_year]])
-    
-    if (length(remaining_choices) > 0) {
-      updateSelectInput(session, "site_param_choice",
-                        choices = remaining_choices,
-                        selected = remaining_choices[1])
-      
-      showNotification(
-        paste0("Calibration verified and saved for: ", current_site_param, 
-               ". Remaining: ", length(remaining_choices)),
-        type = "message",
-        duration = 5
-      )
-    } else {
-      showNotification(
-        paste0("All calibrations verified for year ", current_year, "!"),
-        type = "message",
-        duration = 10
-      )
-      
-      # Find next year with data
-      all_years <- names(calibrated_data_tracking)
-      current_year_idx <- which(all_years == current_year)
-      
-      if (current_year_idx < length(all_years)) {
-        next_year <- all_years[current_year_idx + 1]
-        updateSelectInput(session, "year_choice", selected = next_year)
-      }
-    }
   })
   
 }

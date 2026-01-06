@@ -15,7 +15,7 @@ cal_plot <- function(df) {
     # Calibrated data
     df %>%
       select(DT_round, value = mean_cleaned_cal) %>%
-      mutate(data_type = "Calibrated Data")
+      mutate(data_type = "Back-calibrated Data")
   )
   
   # Create vline dataframe
