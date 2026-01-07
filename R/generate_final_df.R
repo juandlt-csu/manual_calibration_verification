@@ -6,7 +6,14 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
   parameter <- unique(cal_data$parameter)
   
   updated_calibrations <- site_cal_data %>% 
-    bind_cols(decisions) %>% 
+    bind_cols(decisions) %>%
+    select(sensor_date, DT_round, from, to)
+  
+  # Join decisions to cal_plot_df()
+  updated_cal_plot_df <- cal_data %>% 
+    dplyr::left_join(updated_calibrations, by = c("sensor_date", "DT_round")) %>% 
+    # Forward fill with updated decisions %>% 
+    tidyr::fill(from, to, .direction = "downup") %>% 
     mutate(
       updated_slope_from = case_when(
         from == "Original" ~ slope,
@@ -32,19 +39,7 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
         to == "Lead" ~ offset_lead,
         .default = offset_lead
       )
-    ) %>% 
-    select(DT_round, 
-           updated_slope_from, updated_slope_to,
-           updated_offset_from, updated_offset_to,
-           from, to)
-  
-  # Join decisions to cal_plot_df()
-  updated_cal_plot_df <- cal_data %>% 
-    dplyr::left_join(updated_calibrations, by = c("sensor_date", "DT_round")) %>% 
-    # Forward fill with updated decisions %>% 
-    tidyr::fill(updated_slope_from, updated_slope_to,
-                updated_offset_from, updated_offset_to, 
-                .direction = "down")
+    ) 
   
   # Back calibrate with updated decisions
   if (parameter %in% c("Chl-a Fluorescence", "FDOM Fluorescence", "ORP", 
@@ -64,6 +59,7 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
       cal_lin_trans_inv_lm_pH(
         df = ., 
         mv_col = "mean_cleaned_raw",
+        # From and to might be backwards in cal_lin_trans_inv_lm_pH?
         slope_from_col = "updated_slope_from", offset_from_col = "updated_offset_from",
         slope_to_col = "updated_slope_to", offset_to_col = "updated_offset_to",
         wt_col = "wt"
@@ -78,6 +74,7 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
     # FALSE calibration checks mean that either the auto re-calibration failed OR
     # Manual re-calibration resulted in no re-calibration being done on the data
     mutate(cal_check = ifelse((from == "Original" & to == "Original"), FALSE, cal_check))
+  # This was not working for all of the parameters that were not spc, turb, and pH, so they will need to be tweaked later. the issue was that I hadn't filled down on from and to columns so this will need to get updated.
   
   # Reorder the final columns 
   final_df <- checked_df %>%
