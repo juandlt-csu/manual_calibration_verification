@@ -1,0 +1,201 @@
+---
+title: "updating_calibration_columns"
+output: html_document
+---
+
+```{r}
+library(shiny)
+library(ross.wq.tools)
+library(DT)
+
+#Installing and loading all packages
+invisible(
+  lapply(c(
+    "tidyverse", # Data manipulation
+    "janitor", # Clean dirty data
+    "lubridate", # Date-Time Manipulation
+    "rvest", # HTML Retrieval and Manipulation
+    "readxl", # Reading excel files
+    "here", # Easy, cross platform file referencing
+    "ggplot2", # Plotting libraries
+    "ggpubr",
+    "plotly",
+    "devtools", # For downloading GitHub packages
+    "remotes",
+    "yaml",
+    "arrow", # reading parquet files
+    "groupdata2"
+  ),
+  function(x) {
+    if (x %in% installed.packages()) {
+      suppressMessages({
+        library(x, character.only = TRUE)
+      })
+    } else {
+      suppressMessages({
+        install.packages(x)
+        library(x, character.only = TRUE)
+      })
+    }
+  })
+)
+```
+
+# Pull in the freshly updated calibration data from Sam
+```{r}
+new_cal_data <- read_rds(here("data", "raw", "sensor", "manual_data_verification", 
+                              "2025_cycle","hydro_vu_pull","back_calibration", 
+                              "calibrated_sensor_data_2025.rds"))
+```
+
+# Pull in the manual calibration verifications that I did on the wrong columns
+```{r}
+manual_calibration_data <- read_rds(here("data", "raw", "sensor", 
+                                         "manual_data_verification", 
+                                         "complete_dataset", 
+                                         "calibrated_sensor_field_data_finalized.rds"))
+
+manual_25_cal_data <- manual_calibration_data$`2025`
+```
+
+# Prepare the incoming auto calibrated data to be joined 
+```{r}
+new_cal_data_join <- new_cal_data %>%
+  map(function(cal_df){
+    join_df <- cal_df %>%
+      dplyr::select(-cal_check, -wt, -contains("slope"), -contains("offset"))
+    return(join_df)
+  })
+```
+
+# Prepare the manually verified data to be joined
+```{r}
+man_cal_data_join <- manual_25_cal_data %>%
+  # We want to prepare the data and select only those columns that are relevant for the data update
+  map(function(cal_df){
+    join_df <- cal_df %>%
+      tidyr::fill(cal_check, .direction = "downup") %>%
+      dplyr::select(
+        # Join info
+        DT_round, site, parameter, sensor_serial, 
+        # Calibration update info
+        cal_check, wt,
+        contains("slope"), contains("offset")
+      )
+    return(join_df)
+  })
+```
+
+# Clean up environment
+```{r}
+rm(new_cal_data, manual_calibration_data, manual_25_cal_data)
+gc()
+```
+
+# Join the datasets
+```{r}
+# Order both datasets alphabetically 
+new_cal_data_join <- new_cal_data_join[sort(names(new_cal_data_join))]
+man_cal_data_join <- man_cal_data_join[sort(names(man_cal_data_join))]
+
+joined_cal_data <- map2(
+  .x = new_cal_data_join, 
+  .y = man_cal_data_join, 
+  .f = ~ left_join(.x, .y, by = c("DT_round", "site", "parameter", "sensor_serial"))
+)
+
+rm(man_cal_data_join, new_cal_data_join)
+gc()
+```
+
+# Update the data
+```{r}
+final_cal_data <- joined_cal_data %>%
+  map(function(cal_df){
+    
+    # Extract parameter from the data
+    parameter <- unique(cal_df$parameter)
+    
+    # pH processing
+    if (parameter == "pH"){
+      
+      # Accept no updates (25 columns)
+      if (ncol(cal_df) == 25){
+        cal_df <- cal_df %>%
+          cal_lin_trans_inv_lm_pH(
+            df = ., 
+            mv_col = "mean_raw",
+            slope_from_col = "slope_final", offset_from_col = "offset_final",
+            slope_to_col = "slope_lead", offset_to_col = "offset_lead",
+            wt_col = "wt"
+          ) %>%
+          mutate(mean_cal = ifelse(cal_check, mean_lm_trans, mean))
+      }
+      
+      # Accept manual updates (29 columns)
+      if (ncol(cal_df) == 29){
+        cal_df <- cal_df %>%
+          cal_lin_trans_inv_lm_pH(
+            df = ., 
+            mv_col = "mean_raw",
+            slope_from_col = "updated_slope_from", offset_from_col = "updated_offset_from",
+            slope_to_col = "updated_slope_to", offset_to_col = "updated_offset_to",
+            wt_col = "wt"
+          ) %>%
+          mutate(mean_cal = ifelse(cal_check, mean_lm_trans, mean))
+      } 
+    }
+    
+    # Non-pH processing
+    if (parameter %in% c("Chl-a Fluorescence", "FDOM Fluorescence", "ORP", 
+                         "Pressure", "Specific Conductivity", "DO", "Turbidity")){
+      
+      # Accept no updates (25 columns)
+      if (ncol(cal_df) == 25){
+        cal_df <- cal_df %>%
+          cal_lin_trans_lm(
+            df = ., 
+            raw_col = "mean_raw",
+            slope_from_col = "slope_final", offset_from_col = "offset_final",
+            slope_to_col = "slope_lead", offset_to_col = "offset_lead",
+            wt_col = "wt"
+          ) %>%
+          mutate(mean_cal = ifelse(cal_check, mean_lm_trans, mean))
+      }
+      
+      # Accept manual updates (29 columns)
+      if (ncol(cal_df) == 29){
+        cal_df <- cal_df %>%
+          cal_lin_trans_lm(
+            df = ., 
+            raw_col = "mean_raw",
+            slope_from_col = "updated_slope_from", offset_from_col = "updated_offset_from",
+            slope_to_col = "updated_slope_to", offset_to_col = "updated_offset_to",
+            wt_col = "wt"
+          ) %>%
+          mutate(mean_cal = ifelse(cal_check, mean_lm_trans, mean))
+      } 
+    }
+    
+    # Reorder final columns 
+    final_df <- cal_df %>%
+      dplyr::select(
+        DT_round, site, sonde_serial, parameter,
+        mean, mean_raw, mean_lm_trans, mean_cal, cal_check,
+        sensor_serial, file_date, sonde_date, sensor_date_lag, sensor_date, sensor_date_lead,
+        correct_calibration, slope_lag, offset_lag, slope, offset, slope_final, offset_final, slope_lead, offset_lead,
+        any_of(c("updated_slope_from", "updated_offset_from", "updated_slope_to", "updated_offset_to", "wt"))
+      )
+    
+    return(final_df)
+  })
+```
+
+# Save the updated dataset
+```{r}
+write_rds(final_cal_data, 
+          here("data", "raw", "sensor", "manual_data_verification", 
+               "2025_cycle","hydro_vu_pull","back_calibration", 
+               "calibrated_sensor_field_data_finalized_2025.rds"))
+```
+

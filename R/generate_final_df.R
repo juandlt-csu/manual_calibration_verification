@@ -59,7 +59,6 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
       cal_lin_trans_inv_lm_pH(
         df = ., 
         mv_col = "mean_cleaned_raw",
-        # From and to might be backwards in cal_lin_trans_inv_lm_pH?
         slope_from_col = "updated_slope_from", offset_from_col = "updated_offset_from",
         slope_to_col = "updated_slope_to", offset_to_col = "updated_offset_to",
         wt_col = "wt"
@@ -74,7 +73,10 @@ generate_final_df <- function(cal_data, site_cal_data, decisions) {
     # FALSE calibration checks mean that either the auto re-calibration failed OR
     # Manual re-calibration resulted in no re-calibration being done on the data
     mutate(cal_check = ifelse((from == "Original" & to == "Original"), FALSE, cal_check))
-  # This was not working for all of the parameters that were not spc, turb, and pH, so they will need to be tweaked later. the issue was that I hadn't filled down on from and to columns so this will need to get updated.
+  # This was not filling down for all of the parameters that were not spc, turb, and pH, 
+  # so they will need to be tweaked later. the issue was that I hadn't filled 
+  # down on from and to columns so this will need to get updated. Filling down
+  # on this column will fix the problem. THIS WAS COMPLETED WHEN UPDATING COLUMN INFO.
   
   # Reorder the final columns 
   final_df <- checked_df %>%
